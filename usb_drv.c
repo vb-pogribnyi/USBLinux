@@ -13,21 +13,24 @@ static __u8 *usb_buffer;
 
 ssize_t usb_drv_read (struct file *file, char __user *buffer, size_t count, loff_t *offset) {
     int res = 0;
+    int actual_len = 0;
     
-    __u8 endpoint = 0;
-    __u8 request = 0x00;    // GET_STATUS
-    __u8 requesttype = 0xC0;// TYPE_VENDOR | RECEPIENT_DEVICE
-    __u16 index = 0;
-    __u16 value = 0;
-    unsigned int pipe = usb_rcvctrlpipe(usb_drv_device, endpoint);
+    // __u8 endpoint = 0;
+    // __u8 request = 0x00;    // GET_STATUS
+    // __u8 requesttype = 0xC0;// TYPE_VENDOR | RECEPIENT_DEVICE
+    // __u16 index = 0;
+    // __u16 value = 0;
+    unsigned int pipe = usb_rcvintpipe(usb_drv_device, 1);
 
-    usb_control_msg(usb_drv_device, pipe, request, requesttype, value, index,
-        usb_buffer, 8, 5000);
+    // usb_control_msg(usb_drv_device, pipe, request, requesttype, value, index,
+    //     usb_buffer, 8, 5000);
+    usb_interrupt_msg(usb_drv_device, pipe,
+	usb_buffer, 8, &actual_len, 5000);
     usb_buffer[0] += 48;
     usb_buffer[1] = '\n';
 
     res = copy_to_user(buffer, usb_buffer, 8);
-    printk("Reading %lu bytes: %s\n", count, usb_buffer);
+    printk("Reading %lu bytes: %s (%i read)\n", count, usb_buffer, actual_len);
     if (*offset < 8) {
         *offset += 8;
         return 8;
