@@ -12,7 +12,6 @@ static struct usb_device *usb_drv_device;
 static __u8 *usb_buffer;
 
 ssize_t usb_drv_read (struct file *file, char __user *buffer, size_t count, loff_t *offset) {
-    static bool is_first = true;
     int res = 0;
     
     __u8 endpoint = 0;
@@ -24,12 +23,13 @@ ssize_t usb_drv_read (struct file *file, char __user *buffer, size_t count, loff
 
     usb_control_msg(usb_drv_device, pipe, request, requesttype, value, index,
         usb_buffer, 8, 5000);
-        
+    usb_buffer[0] += 48;
+    usb_buffer[1] = '\n';
 
     res = copy_to_user(buffer, usb_buffer, 8);
     printk("Reading %lu bytes: %s\n", count, usb_buffer);
-    if (is_first) {
-        is_first = false;
+    if (*offset < 8) {
+        *offset += 8;
         return 8;
     }
     return 0;
