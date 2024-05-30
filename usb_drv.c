@@ -10,22 +10,24 @@ const struct usb_device_id usb_drv_id_table[] = {
 static struct usb_class_driver usb_drv_class;
 static struct usb_device *usb_drv_device;
 static __u8 *usb_buffer;
+// static bool is_probing = false;
+static struct urb *urb;
+static __u8 *urb_buffer;
 
 ssize_t usb_drv_read (struct file *file, char __user *buffer, size_t count, loff_t *offset) {
     int res = 0;
     int actual_len = 0;
     
-    // __u8 endpoint = 0;
-    // __u8 request = 0x00;    // GET_STATUS
-    // __u8 requesttype = 0xC0;// TYPE_VENDOR | RECEPIENT_DEVICE
-    // __u16 index = 0;
-    // __u16 value = 0;
-    unsigned int pipe = usb_rcvintpipe(usb_drv_device, 1);
+    __u8 endpoint = 0;
+    __u8 request = 0x00;    // GET_STATUS
+    __u8 requesttype = 0xC0;// TYPE_VENDOR | RECEPIENT_DEVICE
+    __u16 index = 0;
+    __u16 value = 0;
+    unsigned int pipe = usb_rcvctrlpipe(usb_drv_device, endpoint);
 
-    // usb_control_msg(usb_drv_device, pipe, request, requesttype, value, index,
-    //     usb_buffer, 8, 5000);
-    usb_interrupt_msg(usb_drv_device, pipe,
-	usb_buffer, 8, &actual_len, 5000);
+    usb_control_msg(usb_drv_device, pipe, request, requesttype, value, index,
+        usb_buffer, 8, 5000);
+    // usb_interrupt_msg(usb_drv_device, pipe, usb_buffer, 8, &actual_len, 5000);
     usb_buffer[0] += 48;
     usb_buffer[1] = '\n';
 
@@ -69,8 +71,19 @@ struct file_operations fops = {
     .write=usb_drv_write
 };
 
+static void usb_int_callback(struct urb* urb) {
+    printk("Interrupt happened: %i\n", urb_buffer[0]);
+    if (usb_submit_urb(urb, GFP_KERNEL)) {
+        printk("Failed to RE-submit URB\n");
+    }
+
+}
+
 int usb_drv_probe (struct usb_interface *intf, const struct usb_device_id *id) {
     int retval = 0;
+    struct usb_host_endpoint *ep;
+    unsigned int pipe;
+
     printk("Probing device\n");
     usb_drv_class.name = "usb/usbdrv_%d";
     usb_drv_class.fops = &fops;
@@ -80,11 +93,29 @@ int usb_drv_probe (struct usb_interface *intf, const struct usb_device_id *id) {
     } else {
         printk("Minor obtained: %d\n", intf->minor);
     }
+
+    // Start interrupt requests
+    urb = usb_alloc_urb(0, GFP_KERNEL);
+    pipe = usb_rcvintpipe(usb_drv_device, 1);
+    urb_buffer = kmalloc(8, GFP_KERNEL);
+
+	ep = usb_pipe_endpoint(usb_drv_device, pipe);
+    usb_fill_int_urb(urb, usb_drv_device, pipe, urb_buffer, 8, 
+        usb_int_callback, NULL, ep->desc.bInterval);
+    if (usb_submit_urb(urb, GFP_KERNEL)) {
+        kfree(urb_buffer);
+        usb_free_urb(urb);
+        printk("Failed to submit URB\n");
+    }
+
+
     return retval;
 }
 
 void usb_drv_disconnect(struct usb_interface *intf) {
     printk("Disconnecting device\n");
+    kfree(urb_buffer);
+    usb_free_urb(urb);
     usb_deregister_dev(intf, &usb_drv_class);
 }
 
