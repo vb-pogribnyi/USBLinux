@@ -1,6 +1,9 @@
 #include <linux/module.h>
 #include <linux/usb.h>
 #include <linux/slab.h>
+#include <linux/netlink.h>
+#include <net/sock.h>
+#define NETLINK_USER 31
 
 const struct usb_device_id usb_drv_id_table[] = {
     {USB_DEVICE(0x0483, 0x1234)},
@@ -13,6 +16,15 @@ static __u8 *usb_buffer;
 // static bool is_probing = false;
 static struct urb *urb;
 static __u8 *urb_buffer;
+static struct sock *nl_sock;
+static int pid;
+
+static void nl_receive(struct sk_buff *skb) {
+    struct nlmsghdr *nlh;
+    nlh = (struct nlmsghdr*)skb->data;
+    pid = nlh->nlmsg_pid;
+    printk("Received message from pid %i: %s\n", pid, (char*)nlmsg_data(nlh));
+}
 
 ssize_t usb_drv_read (struct file *file, char __user *buffer, size_t count, loff_t *offset) {
     int res = 0;
@@ -72,6 +84,17 @@ struct file_operations fops = {
 };
 
 static void usb_int_callback(struct urb* urb) {
+    struct sk_buff *skb_out = nlmsg_new(1, 0);
+    struct nlmsghdr *nlh;
+    int res;
+
+    nlh = nlmsg_put(skb_out, 0, 0, NLMSG_DONE, 1, 0);
+    NETLINK_CB(skb_out).dst_group = 0;
+    strncpy(nlmsg_data(nlh), urb_buffer, 1);
+    res = nlmsg_unicast(nl_sock, skb_out, pid);
+    if (res < 0) {
+        printk("NLMSG error: %i\n", res);
+    }
     printk("Interrupt happened: %i\n", urb_buffer[0]);
     if (usb_submit_urb(urb, GFP_KERNEL)) {
         printk("Failed to RE-submit URB\n");
@@ -127,14 +150,23 @@ struct usb_driver usb_drv = {
 };
 
 int __init usb_drv_init(void) {
+    struct netlink_kernel_cfg cfg = {
+        .input=nl_receive,
+    };
     printk("Initializing\n");
     usb_buffer = kmalloc(8, GFP_KERNEL);
     usb_register(&usb_drv);
+    
+    nl_sock = netlink_kernel_create(&init_net, NETLINK_USER, &cfg);
+    if (!nl_sock) {
+        printk("Unable to create socket\n");
+    }
     return 0;
 }
 
 void __exit usb_drv_exit(void) {
     printk("Exiting\n");
+    netlink_kernel_release(nl_sock);
     usb_deregister(&usb_drv);
     kfree(usb_buffer);
 }
