@@ -71,32 +71,22 @@ ssize_t usb_drv_write (struct file *file, const char __user *buffer, size_t coun
 
     res = copy_from_user(value_str, buffer, 1);
     pipe = usb_sndctrlpipe(usb_drv_device, endpoint);
-    if (value_str[0] == 's') {
-        res = copy_from_user(audio_buffer, buffer, count);
-        printk("Requesting audio transmittion\n");
-        usb_control_msg(usb_drv_device, pipe, request, 0x41, (__u16) value_l, index,
-            data, size, 5000);
-        msleep(10);
+    res = copy_from_user(audio_buffer, buffer, count);
+    printk("Requesting audio transmittion\n");
+    usb_control_msg(usb_drv_device, pipe, request, 0x41, (__u16) value_l, index,
+        data, size, 5000);
+    msleep(10);
 
-        tmp_buff = kmalloc(512, GFP_KERNEL);
-        memcpy(tmp_buff, audio_buffer, 512);
+    tmp_buff = kmalloc(512, GFP_KERNEL);
+    memcpy(tmp_buff, audio_buffer, 512);
 
-        printk("Sengind audio: %s\n", tmp_buff);
-        pipe_blk = usb_sndbulkpipe(usb_drv_device, 2);
-        res = usb_bulk_msg(usb_drv_device, pipe_blk, tmp_buff, 512, &actual_length, 1000);
-        if (res) printk("Error sending request: %i\n", res);
-        printk("Sent: %i\n", actual_length);
-        kfree(tmp_buff);
-        return count;
-    } else {
-        res = kstrtol(value_str, 10, &value_l);
-        printk("Writing %lu bytes: %s, %li\n", count, value_str, value_l);
-        
-        usb_control_msg(usb_drv_device, pipe, request, requesttype, (__u16) value_l, index,
-            data, size, 5000);
-
-        return count;
-    }
+    printk("Sengind audio: %s\n", tmp_buff);
+    pipe_blk = usb_sndbulkpipe(usb_drv_device, 2);
+    res = usb_bulk_msg(usb_drv_device, pipe_blk, tmp_buff, 512, &actual_length, 1000);
+    if (res) printk("Error sending request: %i\n", res);
+    printk("Sent: %i\n", actual_length);
+    kfree(tmp_buff);
+    return count;
 }
 int usb_drv_open (struct inode *node, struct file *file) {
     return 0;
