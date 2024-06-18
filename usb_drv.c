@@ -19,7 +19,6 @@ static struct urb *urb;
 static __u8 *urb_buffer;
 static struct sock *nl_sock;
 static int pid;
-static uint8_t audio_buffer[512] = {0};
 
 uint8_t* tmp_buff;
 
@@ -28,6 +27,34 @@ static void nl_receive(struct sk_buff *skb) {
     nlh = (struct nlmsghdr*)skb->data;
     pid = nlh->nlmsg_pid;
     printk("Received message from pid %i: %s\n", pid, (char*)nlmsg_data(nlh));
+}
+
+int try_send_audio(uint8_t* buff, uint16_t count) {
+    __u8 endpoint = 0;
+    __u8 request = 0x03;    // SET_FEATURE
+    __u8 requesttype = 0xC1;// TYPE_VENDOR | RECEPIENT_DEVICE
+    __u16 index = 0;
+    __u16 value = count;
+    int res = 0;
+    unsigned int pipe;
+    unsigned int pipe_blk;
+    int actual_length;
+    pipe = usb_rcvctrlpipe(usb_drv_device, endpoint);
+    pipe_blk = usb_sndbulkpipe(usb_drv_device, 2);
+
+    usb_control_msg(usb_drv_device, pipe, request, requesttype, value, index,
+        usb_buffer, 8, 5000);
+    if (usb_buffer[0] == 1) {
+        // Send audio using bulk transaction
+        printk("Sengind audio: %i bytes\n", count);
+        res = usb_bulk_msg(usb_drv_device, pipe_blk, buff, count, &actual_length, 1000);
+        if (res) printk("Error sending request: %i\n", res);
+        printk("Sent: %i\n", actual_length);
+        return actual_length;
+    } else {
+        // There's no space available on the device. Wait.
+        return 0;
+    }
 }
 
 ssize_t usb_drv_read (struct file *file, char __user *buffer, size_t count, loff_t *offset) {
@@ -56,35 +83,23 @@ ssize_t usb_drv_read (struct file *file, char __user *buffer, size_t count, loff
     return 0;
 }
 ssize_t usb_drv_write (struct file *file, const char __user *buffer, size_t count, loff_t *offset) {
-    char value_str[8] = {0};
-    long value_l = 0;
     int res = 0;
-    unsigned int pipe;
-    unsigned int pipe_blk;
-    int actual_length;
-    __u8 endpoint = 0;
-    __u8 request = 0x03;    // SET_FEATURE
-    __u8 requesttype = 0x40;// TYPE_VENDOR | RECEPIENT_DEVICE
-    __u16 index = 0;
-    void *data = 0;
-    __u16 size = 0;
+    size_t bytes_sent = 0;
+    int packet_size = 2048;
+    int retries = 0;
 
-    res = copy_from_user(value_str, buffer, 1);
-    pipe = usb_sndctrlpipe(usb_drv_device, endpoint);
-    res = copy_from_user(audio_buffer, buffer, count);
     printk("Requesting audio transmittion\n");
-    usb_control_msg(usb_drv_device, pipe, request, 0x41, (__u16) value_l, index,
-        data, size, 5000);
-    msleep(10);
+    tmp_buff = kmalloc(count, GFP_KERNEL);
+    res = copy_from_user(tmp_buff, buffer, count);
 
-    tmp_buff = kmalloc(512, GFP_KERNEL);
-    memcpy(tmp_buff, audio_buffer, 512);
+    // Do send in a loop
+    while (bytes_sent < count && retries++ < 1000) {
+        if (packet_size > count) packet_size = count;
+        bytes_sent += try_send_audio(tmp_buff + bytes_sent, packet_size);
+        printk("Total sent: %li bytes\n", bytes_sent);
+        msleep(5);
+    }
 
-    printk("Sengind audio: %s\n", tmp_buff);
-    pipe_blk = usb_sndbulkpipe(usb_drv_device, 2);
-    res = usb_bulk_msg(usb_drv_device, pipe_blk, tmp_buff, 512, &actual_length, 1000);
-    if (res) printk("Error sending request: %i\n", res);
-    printk("Sent: %i\n", actual_length);
     kfree(tmp_buff);
     return count;
 }
