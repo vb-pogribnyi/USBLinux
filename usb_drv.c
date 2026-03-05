@@ -25,7 +25,8 @@ static __u8 *urb_buffer;
 static __u8 *urb_blk_buffer;
 static struct sock *nl_sock;
 static int pid;
-static int is_blk_active = 0;
+static int is_blk_idle = 1;
+wait_queue_head_t usb_queue;
 
 uint8_t* tmp_buff;
 
@@ -74,10 +75,21 @@ ssize_t usb_drv_read (struct file *file, char __user *buffer, size_t count, loff
     __u16 index = 0;
     __u16 value = 0;
     unsigned int pipe = usb_rcvctrlpipe(usb_drv_device, endpoint);
+    unsigned int pipe_int = usb_sndintpipe(usb_drv_device, 2);
+    int i = 0;
 
     usb_control_msg(usb_drv_device, pipe, request, requesttype, value, index,
         usb_buffer, 8, 5000);
-    // usb_interrupt_msg(usb_drv_device, pipe, usb_buffer, 8, &actual_len, 5000);
+
+    for (i = 0; i < 100; i++) {
+        usb_interrupt_msg(usb_drv_device, pipe_int, usb_buffer, 8, &actual_len, 5000);
+        wait_event_interruptible(usb_queue, !is_blk_idle);
+        wait_event_interruptible(usb_queue, is_blk_idle);
+    }
+
+    request = END_SOUND_TRANSMIT;
+    usb_control_msg(usb_drv_device, pipe, request, requesttype, value, index,
+        usb_buffer, 8, 5000);
     // usb_buffer[0] += 48;
     // usb_buffer[1] = '\n';
 
@@ -85,10 +97,10 @@ ssize_t usb_drv_read (struct file *file, char __user *buffer, size_t count, loff
 
     res = copy_to_user(buffer, usb_buffer, 8);
     printk("Reading %lu bytes: %s (%i read)\n", count, usb_buffer, actual_len);
-    if (*offset < 8) {
+    /*if (*offset < 8) {
         *offset += 8;
         return 8;
-    }
+    }*/
     return 0;
 }
 ssize_t usb_drv_write (struct file *file, const char __user *buffer, size_t count, loff_t *offset) {
@@ -129,7 +141,8 @@ static void usb_blk_callback(struct urb* urb) {
     } else {
         printk("Transfer error: %i.\n", urb->status);
     }
-    is_blk_active = 0;
+    is_blk_idle = 1;
+    wake_up_interruptible(&usb_queue);
 }
 
 static void usb_int_callback(struct urb* urb) {
@@ -146,13 +159,14 @@ static void usb_int_callback(struct urb* urb) {
 
     // res = usb_bulk_msg(usb_drv_device, pipe_blk, usb_buffer, BLK_SIZE, &actual_length, 1000);
     // if (res) printk("Error sending request: %i\n", res);
-    if (is_blk_active) {
+    if (!is_blk_idle) {
         printk("Bulk URB remains active!\n");
     } else {
         if (usb_submit_urb(urb_blk, GFP_KERNEL)) {
             printk("Failed to submit bulk URB\n");
         } else {
-            is_blk_active = 1;
+            is_blk_idle = 0;
+            wake_up_interruptible(&usb_queue);
         }
     }
     // printk("Received: %i\n", actual_length);
@@ -196,6 +210,7 @@ int usb_drv_probe (struct usb_interface *intf, const struct usb_device_id *id) {
     urb_buffer = kmalloc(8, GFP_KERNEL);
     urb_blk_buffer = kmalloc(BLK_SIZE, GFP_KERNEL);
 
+    init_waitqueue_head(&usb_queue);
 	ep = usb_pipe_endpoint(usb_drv_device, pipe);
 	ep_blk = usb_pipe_endpoint(usb_drv_device, pipe_blk);
     usb_fill_int_urb(urb, usb_drv_device, pipe, urb_buffer, 8, 
